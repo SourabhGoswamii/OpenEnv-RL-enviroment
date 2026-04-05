@@ -1,0 +1,19 @@
+name: ai-ticket-prioritization-env
+
+description: >
+  A reinforcement learning environment simulating real-world software engineering
+  ticket prioritization. The agent must decide the optimal order to resolve tickets
+  (bugs, features, enhancements) under deadlines and resource constraints.
+
+entry_point: server.taskmanager_environment:TaskmanagerEnvironment
+
+action_space: TaskmanagerAction
+observation_space: TaskmanagerObservation
+
+max_steps: 20
+
+tags:
+  - openenv
+  - reinforcement-learning
+  - scheduling
+  - software-engineering
