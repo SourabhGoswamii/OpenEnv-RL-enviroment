@@ -9,11 +9,13 @@ app_port: 8000
 base_path: /web
 tags:
   - openenv
+  - rl
+  - scheduling
 ---
 
 # Taskmanager Environment
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+A reinforcement learning environment that simulates a real-world engineering workflow. The agent must prioritize tickets (bugs, features, UI enhancements) to maximize business impact and avoid SLA violations. 
 
 ## Quick Start
 
@@ -24,36 +26,74 @@ from taskmanager import TaskmanagerAction, TaskmanagerEnv
 
 try:
     # Create environment from Docker image
-    taskmanagerenv = TaskmanagerEnv.from_docker_image("taskmanager-env:latest")
+    env = TaskmanagerEnv.from_docker_image("taskmanager:latest")
 
-    # Reset
-    result = taskmanagerenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
+    # Reset to start a new episode
+    result = env.reset()
+    
+    print(f"Current Time: {result.observation.current_time}")
+    print(f"Available Tasks: {len(result.observation.tasks)}")
 
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
-
-    for msg in messages:
-        result = taskmanagerenv.step(TaskmanagerAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
+    # Execute tasks until the episode is done
+    done = False
+    while not done:
+        # Simple policy: pick the first available task
+        if not result.observation.tasks:
+            break
+            
+        task_to_execute = result.observation.tasks[0]
+        task_id = task_to_execute["id"]
+        
+        # Take a step
+        result = env.step(TaskmanagerAction(task_id=task_id))
+        
+        print(f"Executed Task ID: {task_id}")
         print(f"  → Reward: {result.reward}")
+        print(f"  → Current Time: {result.observation.current_time}")
+        print(f"  → Tasks Remaining: {len(result.observation.tasks)}")
+        
+        done = result.done
+
+    print("Episode completed!")
 
 finally:
     # Always clean up
-    taskmanagerenv.close()
+    env.close()
 ```
 
-That's it! The `TaskmanagerEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
+## Environment Details
+
+### Action
+**TaskmanagerAction**: Contains a single field specifying the task to execute.
+- `task_id` (int) - The ID of the task/ticket to execute
+
+### Observation
+**TaskmanagerObservation**: Contains the current state of the environment.
+- `tasks` (List[Dict]) - List of remaining tickets. Each ticket has:
+  - `id` (int): Unique identifier
+  - `type` (str): "bug", "feature", or "enhancement"
+  - `effort` (int): Time required to complete the ticket
+  - `priority` (int): Importance (1-5)
+  - `deadline` (int): Target completion time
+- `current_time` (int) - Current time in the schedule
+- `steps_left` (int) - Steps remaining in the episode
+- `reward` (float) - Reward received from the previous action
+- `done` (bool) - Whether the episode is complete (all tasks done or max steps reached)
+- `metadata` (dict) - Additional info like step count
+
+### Reward Function
+The reward function is designed to simulate business impact:
+1. **Base Reward**: `priority * 3` if completed before the deadline.
+2. **Penalty**: If delayed, the reward is reduced based on the delay (`priority - delay * 0.5`), with a minimum of -2.
+3. **Type Multipliers**:
+   - **Bugs**: 2.0x multiplier (Critical)
+   - **Features**: 1.5x multiplier
+   - **Enhancements**: 1.0x multiplier
+4. **Invalid Action**: -1 reward for attempting a non-existent task ID.
 
 ## Building the Docker Image
 
-Before using the environment, you need to build the Docker image. 
+Before using the environment, you need to build the Docker image.
 
 **To create the Docker image:**
 ```bash
@@ -61,25 +101,9 @@ Before using the environment, you need to build the Docker image.
 docker build -t taskmanager .
 ```
 
-**To run the Docker image:**
+**To run the Docker image locally:**
 ```bash
 # Run the container in detached mode and map port 8000
-docker run -d -p 8000:8000 --name taskmanager_server taskmanager
-```
-
-**To update the Docker image and re-run:**
-Whenever you make changes to the code, you'll need to rebuild the image and restart the container.
-```bash
-# 1. Stop the existing container
-docker stop taskmanager_server
-
-# 2. Remove the existing container
-docker rm taskmanager_server
-
-# 3. Rebuild the image
-docker build -t taskmanager .
-
-# 4. Run the updated container
 docker run -d -p 8000:8000 --name taskmanager_server taskmanager
 ```
 
@@ -95,41 +119,6 @@ openenv push
 openenv push --namespace my-org --private
 ```
 
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
-
-### Prerequisites
-
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
-
-### Options
-
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
-
-### Examples
-
-```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
-```
-
 After deployment, your space will be available at:
 `https://huggingface.co/spaces/<repo-id>`
 
@@ -139,142 +128,15 @@ The deployed space includes:
 - **Health Check** at `/health` - Container health monitoring
 - **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
 
-## Environment Details
-
-### Action
-**TaskmanagerAction**: Contains a single field
-- `message` (str) - The message to echo back
-
-### Observation
-**TaskmanagerObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
-
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
-
-## Advanced Usage
-
-### Connecting to an Existing Server
-
-If you already have a Taskmanager environment server running, you can connect directly:
-
-```python
-from taskmanager import TaskmanagerEnv
-
-# Connect to existing server
-taskmanagerenv = TaskmanagerEnv(base_url="<ENV_HTTP_URL_HERE>")
-
-# Use as normal
-result = taskmanagerenv.reset()
-result = taskmanagerenv.step(TaskmanagerAction(message="Hello!"))
-```
-
-Note: When connecting to an existing server, `taskmanagerenv.close()` will NOT stop the server.
-
-### Using the Context Manager
-
-The client supports context manager usage for automatic connection management:
-
-```python
-from taskmanager import TaskmanagerAction, TaskmanagerEnv
-
-# Connect with context manager (auto-connects and closes)
-with TaskmanagerEnv(base_url="http://localhost:8000") as env:
-    result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(TaskmanagerAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
-```
-
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
-
-### Concurrent WebSocket Sessions
-
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
-
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    TaskmanagerEnvironment,  # Pass class, not instance
-    TaskmanagerAction,
-    TaskmanagerObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
-)
-```
-
-Then multiple clients can connect simultaneously:
-
-```python
-from taskmanager import TaskmanagerAction, TaskmanagerEnv
-from concurrent.futures import ThreadPoolExecutor
-
-def run_episode(client_id: int):
-    with TaskmanagerEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(TaskmanagerAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
-
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
-```
-
-## Development & Testing
-
-### Direct Environment Testing
-
-Test the environment logic directly without starting the HTTP server:
-
-```bash
-# From the server directory
-python3 server/taskmanager_environment.py
-```
-
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
-
-### Running Locally
-
-Run the server locally for development:
-
-```bash
-uvicorn server.app:app --reload
-```
-
 ## Project Structure
 
 ```
 taskmanager/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
+├── client.py              # Environment client implementation
+├── models.py              # Action and Observation Pydantic models
 ├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # TaskmanagerEnv client
-├── models.py              # Action and Observation models
-└── server/
-    ├── __init__.py        # Server module exports
-    ├── taskmanager_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+├── server/
+│   ├── app.py             # FastAPI application
+│   └── taskmanager_environment.py  # Core environment logic and reward function
+└── Dockerfile             # Container definition
 ```
-#   O p e n E n v - R L - e n v i r o m e n t  
- 
