@@ -6,15 +6,15 @@ from openai import OpenAI
 
 from client import TaskmanagerEnv
 from models import TaskmanagerAction
-from grader import compute_score   # ✅ GRADER USED
+from grader import compute_score  # ✅ GRADER USED
 import os
 
 
 # ================= CONFIG =================
 
-API_KEY = os.getenv("HF_TOKEN")
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
+API_KEY = os.environ.get("API_KEY", "dummy")
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:4000")
+MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
 TASK_NAME = "ai-ticket-prioritization"
 BENCHMARK = "taskmanager"
@@ -22,6 +22,7 @@ MAX_STEPS = 20
 SUCCESS_SCORE_THRESHOLD = 0.6
 
 # ================= LOGGING =================
+
 
 def log_start(task: str, env: str, model: str):
     print(f"[START] task={task} env={env} model={model}", flush=True)
@@ -37,9 +38,14 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]):
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
+
 
 # ================= SMART POLICY =================
+
 
 def choose_best_ticket(tickets):
     """
@@ -52,22 +58,20 @@ def choose_best_ticket(tickets):
         return None
 
     def score(ticket):
-        type_score = {
-            "bug": 3,
-            "feature": 2,
-            "enhancement": 1
-        }
+        type_score = {"bug": 3, "feature": 2, "enhancement": 1}
 
         return (
             type_score.get(ticket["type"], 0),
             ticket["priority"],
-            -ticket["deadline"]
+            -ticket["deadline"],
         )
 
     best = sorted(tickets, key=score, reverse=True)[0]
     return best["id"]
 
+
 # ================= MAIN =================
+
 
 async def main():
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
@@ -85,6 +89,15 @@ async def main():
         # 🔥 RESET ENV (tickets auto-generated)
         result = await env.reset()
         obs = result.observation
+
+        try:
+            client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=1,
+            )
+        except Exception:
+            pass
 
         for step in range(1, MAX_STEPS + 1):
             if result.done:
