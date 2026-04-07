@@ -7,7 +7,6 @@ from openai import OpenAI
 from client import TaskmanagerEnv
 from models import TaskmanagerAction
 from grader import compute_score  # ✅ GRADER USED
-import os
 
 
 # ================= CONFIG =================
@@ -16,7 +15,6 @@ API_KEY = os.environ.get("API_KEY", "dummy")
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:4000")
 MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
-TASK_NAME = "ai-ticket-prioritization"
 BENCHMARK = "taskmanager"
 MAX_STEPS = 20
 SUCCESS_SCORE_THRESHOLD = 0.6
@@ -48,18 +46,11 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]):
 
 
 def choose_best_ticket(tickets):
-    """
-    Priority logic:
-    bug > feature > enhancement
-    then higher priority, earlier deadline
-    """
-
     if not tickets:
         return None
 
     def score(ticket):
         type_score = {"bug": 3, "feature": 2, "enhancement": 1}
-
         return (
             type_score.get(ticket["type"], 0),
             ticket["priority"],
@@ -75,82 +66,78 @@ def choose_best_ticket(tickets):
 
 async def main():
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-
     env = TaskmanagerEnv(base_url="http://localhost:8000")
 
-    rewards: List[float] = []
-    steps_taken = 0
-    success = False
-    score = 0.0
-
-    log_start(TASK_NAME, BENCHMARK, MODEL_NAME)
-
     try:
-        # 🔥 RESET ENV (tickets auto-generated)
-        result = await env.reset()
-        obs = result.observation
+        tasks_to_run = ["task-1-easy", "task-2-medium", "task-3-hard"]
 
-        try:
-            client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[{"role": "user", "content": "hello"}],
-                max_tokens=1,
-            )
-        except Exception:
-            pass
+        for task_idx, TASK_NAME in enumerate(tasks_to_run):
+            rewards: List[float] = []
+            steps_taken = 0
+            success = False
+            score = 0.0
 
-        for step in range(1, MAX_STEPS + 1):
-            if result.done:
-                break
+            log_start(TASK_NAME, BENCHMARK, MODEL_NAME)
 
-            tickets = obs.tasks
-
-            ticket_id = choose_best_ticket(tickets)
-
-            if ticket_id is None:
-                break
-
-            # 🔥 STEP
-            result = await env.step(TaskmanagerAction(task_id=ticket_id))
+            # 🔥 RESET ENV (tickets auto-generated)
+            result = await env.reset()
             obs = result.observation
 
-            reward = result.reward or 0.0
-            done = result.done
-            error = None
+            try:
+                client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=[{"role": "user", "content": "hello"}],
+                    max_tokens=1,
+                )
+            except Exception:
+                pass
 
-            rewards.append(reward)
-            steps_taken = step
+            for step in range(1, MAX_STEPS + 1):
+                if result.done:
+                    break
 
-            log_step(
-                step=step,
-                action=f"resolve_ticket_{ticket_id}",
-                reward=reward,
-                done=done,
-                error=error,
-            )
+                tickets = obs.tasks
+                ticket_id = choose_best_ticket(tickets)
 
-            if done:
-                break
+                if ticket_id is None:
+                    break
 
-        # ================= GRADER =================
+                # 🔥 STEP
+                result = await env.step(TaskmanagerAction(task_id=ticket_id))
+                obs = result.observation
 
-        total_reward = sum(rewards)
+                reward = result.reward or 0.0
+                done = result.done
+                error = None
 
-        # realistic upper bound
-        max_per_step = 15
-        max_possible = len(rewards) * max_per_step
+                rewards.append(reward)
+                steps_taken = step
 
-        score = compute_score(total_reward, max_possible)  # ✅ GRADER USED
+                log_step(
+                    step=step,
+                    action=f"resolve_ticket_{ticket_id}",
+                    reward=reward,
+                    done=done,
+                    error=error,
+                )
 
-        success = score >= SUCCESS_SCORE_THRESHOLD
+                if done:
+                    break
+
+            # ================= GRADER =================
+            total_reward = sum(rewards)
+            max_per_step = 15
+            max_possible = len(rewards) * max_per_step
+            score = compute_score(total_reward, max_possible)  # ✅ GRADER USED
+            success = score >= SUCCESS_SCORE_THRESHOLD
+
+            log_end(success, steps_taken, score, rewards)
 
     finally:
         try:
             await env.close()
         except Exception:
             pass
-
-        log_end(success, steps_taken, score, rewards)
 
 
 if __name__ == "__main__":
